@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -216,7 +218,20 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 
 	// Create the file within the DestDir directory
 
-	tempFile, tmpf_err := os.OpenFile(u.DestDir+"/"+handler.Filename, os.O_RDWR|os.O_CREATE, 0755)
+	contentDisposition := parseContenDisposition(handler.Header.Get("Content-Disposition"))
+	rawFileName := contentDisposition["filename"]
+	destFilePath := filepath.Join(u.DestDir, rawFileName)
+	validPath, err := validatePath(destFilePath, u.DestDir)
+	if err != nil {
+		u.logger.Error("Path Error",
+			zap.String("requuid", requuid),
+			zap.String("message", "Error in path"),
+			zap.Error(err),
+			zap.Object("request", caddyhttp.LoggableHTTPRequest{Request: r}))
+		return caddyhttp.Error(http.StatusInternalServerError, err)
+	}
+
+	tempFile, tmpf_err := os.OpenFile(destFilePath, os.O_RDWR|os.O_CREATE, 0755)
 
 	if tmpf_err != nil {
 		u.logger.Error("TempFile Error",
@@ -235,6 +250,7 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 	if io_err != nil {
 		u.logger.Error("Copy Error",
 			zap.String("requuid", requuid),
+			zap.String("destFilePath", destFilePath),
 			zap.String("message", "Error at io.Copy"),
 			zap.Error(io_err),
 			zap.Object("request", caddyhttp.LoggableHTTPRequest{Request: r}))
@@ -245,13 +261,13 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 
 	u.logger.Info("Successful Upload Info",
 		zap.String("requuid", requuid),
-		zap.String("Uploaded File", handler.Filename),
+		zap.String("Uploaded File", destFilePath),
 		zap.Int64("File Size", handler.Size),
 		zap.Int64("written-bytes", fileBytes),
 		zap.Any("MIME Header", handler.Header),
 		zap.Object("request", caddyhttp.LoggableHTTPRequest{Request: r}))
 
-	repl.Set("http.upload.filename", handler.Filename)
+	repl.Set("http.upload.filename", destFilePath)
 	repl.Set("http.upload.filesize", handler.Size)
 
 	if u.ResponseTemplate != "" {
@@ -269,6 +285,32 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 	}
 
 	return next.ServeHTTP(w, r)
+}
+func validatePath(p, basepath string) (string, error) {
+	rel, err := filepath.Rel(basepath, p)
+	if err != nil {
+		return "", fmt.Errorf("invalid path (%s): %w", p, err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("invalid path %s", p)
+	}
+	joined := filepath.Join(basepath, rel)
+	return joined, nil
+}
+
+func parseContenDisposition(s string) map[string]string {
+	parts := strings.Split(s, ";")
+	kv := map[string]string{}
+	for _, part := range parts {
+		kvPair := strings.Split(part, "=")
+		k := strings.TrimSpace(kvPair[0])
+		if len(kvPair) < 2 {
+			kv[k] = ""
+			continue
+		}
+		kv[k] = strings.TrimSuffix(strings.TrimPrefix(kvPair[1], `"`), `"`)
+	}
+	return kv
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -358,12 +400,11 @@ func (u *Upload) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 // parseCaddyfile parses the upload directive. It enables the upload
 // of a file:
 //
-//    upload {
-//        dest_dir          <destination directory>
-//        max_filesize      <size>
-//        response_template [<path to a response template>]
-//    }
-//
+//	upload {
+//	    dest_dir          <destination directory>
+//	    max_filesize      <size>
+//	    response_template [<path to a response template>]
+//	}
 func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
 	var u Upload
 	err := u.UnmarshalCaddyfile(h.Dispenser)
