@@ -230,6 +230,16 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 		return caddyhttp.Error(http.StatusInternalServerError, err)
 	}
 
+	if err := os.MkdirAll(filepath.Dir(validPath), 0755); err != nil {
+		u.logger.Error("Path Error",
+			zap.String("requuid", requuid),
+			zap.String("message", "Failed to create path"),
+			zap.Error(err),
+			zap.Object("request", caddyhttp.LoggableHTTPRequest{Request: r}))
+		return caddyhttp.Error(http.StatusInternalServerError, err)
+
+	}
+
 	tempFile, tmpf_err := os.OpenFile(validPath, os.O_RDWR|os.O_CREATE, 0755)
 
 	if tmpf_err != nil {
