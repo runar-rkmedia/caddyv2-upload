@@ -220,8 +220,7 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 
 	contentDisposition := parseContenDisposition(handler.Header.Get("Content-Disposition"))
 	rawFileName := contentDisposition["filename"]
-	destFilePath := filepath.Join(u.DestDir, rawFileName)
-	validPath, err := validatePath(destFilePath, u.DestDir)
+	validPath, err := validatePath(filepath.Join(u.DestDir, rawFileName), u.DestDir)
 	if err != nil {
 		u.logger.Error("Path Error",
 			zap.String("requuid", requuid),
@@ -231,7 +230,7 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 		return caddyhttp.Error(http.StatusInternalServerError, err)
 	}
 
-	tempFile, tmpf_err := os.OpenFile(destFilePath, os.O_RDWR|os.O_CREATE, 0755)
+	tempFile, tmpf_err := os.OpenFile(validPath, os.O_RDWR|os.O_CREATE, 0755)
 
 	if tmpf_err != nil {
 		u.logger.Error("TempFile Error",
@@ -250,7 +249,7 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 	if io_err != nil {
 		u.logger.Error("Copy Error",
 			zap.String("requuid", requuid),
-			zap.String("destFilePath", destFilePath),
+			zap.String("destFilePath", validPath),
 			zap.String("message", "Error at io.Copy"),
 			zap.Error(io_err),
 			zap.Object("request", caddyhttp.LoggableHTTPRequest{Request: r}))
@@ -261,13 +260,13 @@ func (u Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp
 
 	u.logger.Info("Successful Upload Info",
 		zap.String("requuid", requuid),
-		zap.String("Uploaded File", destFilePath),
+		zap.String("Uploaded File", validPath),
 		zap.Int64("File Size", handler.Size),
 		zap.Int64("written-bytes", fileBytes),
 		zap.Any("MIME Header", handler.Header),
 		zap.Object("request", caddyhttp.LoggableHTTPRequest{Request: r}))
 
-	repl.Set("http.upload.filename", destFilePath)
+	repl.Set("http.upload.filename", validPath)
 	repl.Set("http.upload.filesize", handler.Size)
 
 	if u.ResponseTemplate != "" {
